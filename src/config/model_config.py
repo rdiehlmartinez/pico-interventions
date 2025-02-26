@@ -31,3 +31,9 @@ class ModelConfig:
     norm_eps: float = 1e-6
 
     position_emb_theta: float = 10000.0
+
+    # Can be one of "spectral_weight", "frobenius_loss", "orthogonality_loss"
+    rank_normalization_strategy: str = "none"
+
+    # Hyperparameter for the rank normalization loss
+    rank_normalization_loss_weight: float = 0.0
