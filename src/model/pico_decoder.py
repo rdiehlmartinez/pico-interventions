@@ -27,15 +27,23 @@ Adapted from:
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+# from torch.nn.utils.parametrizations import spectral_norm
+from torch.nn.utils import spectral_norm
+
 from torch.nn.attention import sdpa_kernel, SDPBackend
 
 from dataclasses import asdict
+
+import os
 
 from transformers import PretrainedConfig, PreTrainedModel
 from transformers.modeling_outputs import CausalLMOutputWithPast, CausalLMOutput
 
 # typing imports
 from typing import Union, Tuple, Optional, TYPE_CHECKING, Dict, Any
+
+from safetensors import safe_open
 
 try:
     if TYPE_CHECKING:
@@ -226,6 +234,8 @@ class Attention(nn.Module):
     ):
         super().__init__()
 
+        self.normalization_strategy = config.rank_normalization_strategy
+
         self.n_heads = config.attention_n_heads
         self.n_kv_heads = config.attention_n_kv_heads
 
@@ -239,8 +249,15 @@ class Attention(nn.Module):
 
         self.q_proj = nn.Linear(d_model, self.n_heads * self.head_dim, bias=False)
         self.k_proj = nn.Linear(d_model, self.n_kv_heads * self.head_dim, bias=False)
-        self.v_proj = nn.Linear(d_model, self.n_kv_heads * self.head_dim, bias=False)
-        self.o_proj = nn.Linear(self.n_heads * self.head_dim, d_model, bias=False)
+        _v_proj = nn.Linear(d_model, self.n_kv_heads * self.head_dim, bias=False)
+        _o_proj = nn.Linear(self.n_heads * self.head_dim, d_model, bias=False)
+
+        if self.normalization_strategy == "spectral_weight":
+            self.v_proj = spectral_norm(_v_proj)
+            self.o_proj = spectral_norm(_o_proj)
+        else:
+            self.v_proj = _v_proj
+            self.o_proj = _o_proj
 
         self.rope = RoPE(config)
 
@@ -357,7 +374,12 @@ class SwiGLU(nn.Module):
 
         self.w_0 = nn.Linear(model_dim, act_hidden_dim, bias=False)
         self.w_1 = nn.Linear(model_dim, act_hidden_dim, bias=False)
-        self.w_2 = nn.Linear(act_hidden_dim, model_dim, bias=False)
+        _w_2 = nn.Linear(act_hidden_dim, model_dim, bias=False)
+
+        if config.rank_normalization_strategy == "spectral_weight":
+            self.w_2 = spectral_norm(_w_2)
+        else:
+            self.w_2 = _w_2
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.w_2(F.silu(self.w_0(x)) * self.w_1(x))
@@ -428,6 +450,12 @@ class PicoDecoder(nn.Module):
     For more information on the model, see the classes for the modules that make up the model.
     """
 
+    TARGET_MODULES = [
+        "attention.v_proj",
+        "attention.o_proj",
+        "swiglu.w_2",
+    ]
+
     def __init__(
         self,
         model_config: Union["ModelConfig", "PicoDecoderHFConfig"],
@@ -456,6 +484,54 @@ class PicoDecoder(nn.Module):
         hf_model.load_state_dict(self.state_dict(prefix="pico_decoder."))
 
         return hf_model
+
+    def get_orthogonality_loss(self) -> torch.Tensor:
+        """Get the orthogonality loss for the model."""
+
+        # compute the orthogonality loss for the model
+        total_loss = torch.tensor(0.0)
+        for name, module in self.named_modules():
+            if any(target_module in name for target_module in self.TARGET_MODULES):
+                _weight = module.weight
+                _gram_matrix = _weight.T @ _weight
+
+                _orthogonality_loss = torch.norm(
+                    _gram_matrix - torch.eye(len(_gram_matrix), device=_weight.device),
+                    p="fro",
+                )
+                if _weight.device != total_loss.device:
+                    total_loss = total_loss.to(_weight.device)
+                total_loss += _orthogonality_loss
+
+        return total_loss
+
+    def get_frobenius_loss(self) -> torch.Tensor:
+        """Get the frobenius loss for the model."""
+
+        total_loss = torch.tensor(0.0)
+        # compute the frobenius loss for the model
+        for name, module in self.named_modules():
+            if any(target_module in name for target_module in self.TARGET_MODULES):
+                _weight = module.weight
+
+                _weight_norm = torch.norm(_weight, p="fro")
+
+                if _weight.device != total_loss.device:
+                    total_loss = total_loss.to(_weight.device)
+                total_loss += _weight_norm
+
+        return total_loss
+
+    def get_normalization_loss(self) -> torch.Tensor:
+        """Get the normalization loss for the model."""
+        if self.normalization_strategy == "orthogonality_loss":
+            return self.get_orthogonality_loss()
+        elif self.normalization_strategy == "frobenius_loss":
+            return self.get_frobenius_loss()
+        else:
+            raise NotImplementedError(
+                f"Normalization strategy {self.normalization_strategy} not implemented"
+            )
 
     def forward(
         self,
@@ -607,6 +683,28 @@ class PicoDecoderHF(PreTrainedModel):
             return CausalLMOutput(
                 logits=logits,
             )
+
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path, *args, **kwargs):
+        config = PicoDecoderHFConfig.from_pretrained(
+            pretrained_model_name_or_path, *args, **kwargs
+        )
+
+        safetensor_path = os.path.join(
+            pretrained_model_name_or_path, "model.safetensors"
+        )
+        if not os.path.exists(safetensor_path):
+            raise FileNotFoundError(f"Model file not found at {safetensor_path}")
+
+        # load the checkpoint
+        checkpoint = safe_open(safetensor_path, framework="pt")
+        _state_dict = {}
+        for key in checkpoint.keys():
+            _state_dict[key] = checkpoint.get_tensor(key)
+
+        model = cls(config)
+        model.load_state_dict(_state_dict, strict=False)
+        return model
 
 
 # Register for auto classes

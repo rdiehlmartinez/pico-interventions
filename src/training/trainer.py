@@ -401,6 +401,11 @@ class Trainer:
         interval_steps = torch.tensor(0, device=self.fabric.device)
         interval_inf_or_nan_count = torch.tensor(0, device=self.fabric.device)
 
+        if self.configs["model"].rank_normalization_strategy == "orthogonality_loss":
+            interval_orthogonality_loss = torch.tensor(0.0, device=self.fabric.device)
+        elif self.configs["model"].rank_normalization_strategy == "frobenius_loss":
+            interval_frobenius_loss = torch.tensor(0.0, device=self.fabric.device)
+
         if self.should_compute_learning_dynamics:
             # NOTE: we basically re-construct the full batch here so that we can compute learning dynamics
             training_batch = {"input_ids": []}
@@ -470,6 +475,28 @@ class Trainer:
                 self.model, enabled=should_accumulate_gradients
             ):
                 loss = F.cross_entropy(model_output, labels)
+
+                # Compute special losses (orthogonality, frobenius, normalization)
+                if (
+                    self.configs["model"].rank_normalization_strategy
+                    == "orthogonality_loss"
+                ):
+                    orthogonality_loss = (
+                        self.model.get_orthogonality_loss()
+                        * self.configs["model"].rank_normalization_loss_weight
+                    )
+
+                    loss += orthogonality_loss.to(loss.device)
+                elif (
+                    self.configs["model"].rank_normalization_strategy
+                    == "frobenius_loss"
+                ):
+                    frobenius_loss = (
+                        self.model.get_frobenius_loss()
+                        * self.configs["model"].rank_normalization_loss_weight
+                    )
+                    loss += frobenius_loss.to(loss.device)
+
                 self.fabric.backward(
                     loss
                     / self.configs["training"].optimization.gradient_accumulation_steps,
@@ -481,6 +508,17 @@ class Trainer:
                 else:
                     interval_loss += loss.item()
                     interval_steps += 1
+
+                    if (
+                        self.configs["model"].rank_normalization_strategy
+                        == "orthogonality_loss"
+                    ):
+                        interval_orthogonality_loss += orthogonality_loss.item()
+                    elif (
+                        self.configs["model"].rank_normalization_strategy
+                        == "frobenius_loss"
+                    ):
+                        interval_frobenius_loss += frobenius_loss.item()
 
             # NOTE: if we are not accumulating gradients, we should skip the logging and optimization steps
             if should_accumulate_gradients:
@@ -498,10 +536,35 @@ class Trainer:
                     interval_steps=interval_steps,
                     interval_inf_or_nan_count=interval_inf_or_nan_count,
                     batch_step=batch_step,
+                    **{
+                        "interval_orthogonality_loss": interval_orthogonality_loss
+                        if self.configs["model"].rank_normalization_strategy
+                        == "orthogonality_loss"
+                        else None,
+                        "interval_frobenius_loss": interval_frobenius_loss
+                        if self.configs["model"].rank_normalization_strategy
+                        == "frobenius_loss"
+                        else None,
+                    },
                 )
                 interval_loss = torch.tensor(0.0, device=self.fabric.device)
                 interval_steps = torch.tensor(0, device=self.fabric.device)
                 interval_inf_or_nan_count = torch.tensor(0, device=self.fabric.device)
+
+                if (
+                    self.configs["model"].rank_normalization_strategy
+                    == "orthogonality_loss"
+                ):
+                    interval_orthogonality_loss = torch.tensor(
+                        0.0, device=self.fabric.device
+                    )
+                elif (
+                    self.configs["model"].rank_normalization_strategy
+                    == "frobenius_loss"
+                ):
+                    interval_frobenius_loss = torch.tensor(
+                        0.0, device=self.fabric.device
+                    )
 
             ########################################################
             #
@@ -618,6 +681,7 @@ class Trainer:
         interval_steps: torch.Tensor,
         interval_inf_or_nan_count: torch.Tensor,
         batch_step: int,
+        **additional_losses,
     ):
         """
         Gathers together the training metrics computed across all processes in distributed training
@@ -632,6 +696,14 @@ class Trainer:
         gathered_interval_steps = self.fabric.all_reduce(
             interval_steps, reduce_op="sum"
         ).item()
+
+        gathered_avg_additional_losses = {}
+        for loss_name, loss_value in additional_losses.items():
+            if loss_value is not None:
+                gathered_avg_additional_losses[loss_name] = (
+                    self.fabric.all_reduce(loss_value, reduce_op="sum").item()
+                    / gathered_interval_steps
+                )
 
         avg_loss = (
             gathered_interval_loss / gathered_interval_steps
@@ -651,9 +723,29 @@ class Trainer:
             step=batch_step,
         )
 
+        ce_loss = avg_loss
+
+        for loss_name, loss_value in gathered_avg_additional_losses.items():
+            self.fabric.log(
+                f"train/{loss_name.split('interval_')[1]}", loss_value, step=batch_step
+            )
+            ce_loss -= loss_value
+
+        self.fabric.log("train/ce_loss", ce_loss, step=batch_step)
+
         # Log to console in tree format
         self.log(f"Step {batch_step} -- 🔄 Training Metrics")
-        self.log(f"├── Loss: {avg_loss:.4f}")
+        self.log(f"├── Total Loss: {avg_loss:.4f}")
+        for loss_name, loss_value in gathered_avg_additional_losses.items():
+            # Making the loss name more readable
+            _loss_name_split = loss_name.split("interval_")[1].split("_")
+            _loss_name = (
+                _loss_name_split[0].capitalize()
+                + " "
+                + _loss_name_split[1].capitalize()
+            )
+            self.log(f"├── {_loss_name}: {loss_value:.4f}")
+        self.log(f"├── CE Loss: {ce_loss:.4f}")
         self.log(f"├── Learning Rate: {self.lr_scheduler.get_last_lr()[0]:.2e}")
         self.log(f"└── Inf/NaN count: {gathered_interval_inf_or_nan_count}")
 
