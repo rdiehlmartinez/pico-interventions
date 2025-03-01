@@ -23,8 +23,6 @@ from lightning.fabric.utilities.rank_zero import rank_zero_only
 from datasets import Dataset, load_dataset
 from typing import Dict, Any
 
-from src.model import Pico
-
 from src.training.utils import (
     initialize_run_dir,
     initialize_fabric,
@@ -37,6 +35,7 @@ from src.training.utils import (
     initialize_experiment_tracker,
     initialize_logging,
     initialize_optimizer,
+    initialize_model,
 )
 from src.checkpointing import (
     load_checkpoint,
@@ -98,7 +97,7 @@ class Trainer:
         )
 
         # Setup Model, Optimizer, and Dataloaders
-        self.model = Pico(model_config=self.configs["model"])
+        self.model = initialize_model(model_config=self.configs["model"])
         self.optimizer = initialize_optimizer(
             training_config=self.configs["training"], model=self.model
         )
