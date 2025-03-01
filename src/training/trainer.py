@@ -18,6 +18,9 @@ import lightning as L
 import torch
 import torch.nn.functional as F
 import os
+import platform
+import psutil
+import yaml
 from lightning.fabric.utilities.rank_zero import rank_zero_only
 
 from datasets import Dataset, load_dataset
@@ -38,6 +41,7 @@ from src.training.utils import (
     initialize_logging,
     initialize_optimizer,
 )
+from src.training.utils.logging import pretty_print_yaml_config
 from src.checkpointing import (
     load_checkpoint,
     save_checkpoint,
@@ -664,7 +668,14 @@ class Trainer:
                 self.fabric.log(f"eval/{metric}", result, step=batch_step)
 
     def _log_training_configuration(self):
-        """Log training configuration details including model, hardware, and batch settings."""
+        """
+        Log training configuration details as well as runtime information about the hardware,
+        software, and batch settings.
+
+        This function is called at the beginning of the training loop to provide a summary of the
+        training configuration.
+        """
+
         total_params = sum(p.numel() for p in self.model.parameters())
         trainable_params = sum(
             p.numel() for p in self.model.parameters() if p.requires_grad
@@ -684,16 +695,44 @@ class Trainer:
         else:
             device_type = "CPU"
 
+        training_config_path = os.path.join(
+            self.configs["checkpointing"].runs_dir,
+            self.configs["checkpointing"].run_name,
+            "training_config.yaml",
+        )
+        if os.path.exists(training_config_path):
+            self.log("=" * 50)
+            self.log("✨ Training Configuration")
+            self.log("=" * 50)
+            training_config = yaml.safe_load(open(training_config_path, "r"))
+            pretty_print_yaml_config(self.logger, training_config)
+
         self.log("=" * 50)
-        self.log("✨ Training Configuration")
+        self.log("⛭ Runtime Summary:")
         self.log("=" * 50)
         self.log(f"Starting from step: {self.initial_batch_step}")
+
         self.log("Model Setup:")
         self.log(f"└─ Total Parameters: {total_params:,}")
         self.log(f"└─ Trainable Parameters: {trainable_params:,}")
+
         self.log("Distributed Setup:")
         self.log(f"└─ Number of Devices: {self.fabric.world_size}")
         self.log(f"└─ Device Type: {device_type}")
+        self.log(
+            f"└─ Available Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB"
+            if torch.cuda.is_available()
+            else f"└─ Available Memory: {psutil.virtual_memory().total / 1e9:.2f} GB"
+        )
+
+        self.log("Software Setup:")
+        self.log(f"└─ Python Version: {platform.python_version()}")
+        self.log(f"└─ PyTorch Version: {torch.__version__}")
+        self.log(
+            f"└─ CUDA Version: {torch.version.cuda if torch.cuda.is_available() else 'N/A'}"
+        )
+        self.log(f"└─ Operating System: {platform.system()} {platform.release()}")
+
         self.log("Batch Size Configuration:")
         self.log(f"└─ Global Batch Size: {global_batch_size}")
         self.log(f"└─ Per Device Batch Size: {per_device_batch_size}")
