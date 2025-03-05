@@ -15,15 +15,15 @@ class LoggingConfig:
 
 
 @dataclass
-class ExperimentTrackerConfig:
-    framework: Optional[str] = "wandb"
-    wandb_project: Optional[str] = "pico"
-    wandb_entity: Optional[str] = "pico-lm"
+class WandbConfig:
+    project: Optional[str] = "pico"
+    entity: Optional[str] = "pico-lm"
 
 
 @dataclass
 class MonitoringConfig:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
-    experiment_tracker: ExperimentTrackerConfig = field(
-        default_factory=ExperimentTrackerConfig
-    )
+
+    # Weights and Biases
+    save_to_wandb: bool = True
+    wandb: WandbConfig = field(default_factory=WandbConfig)

@@ -35,7 +35,7 @@ from src.training.utils import (
     initialize_dataloader,
     initialize_lr_scheduler,
     initialize_hf_checkpointing,
-    initialize_experiment_tracker,
+    initialize_wandb,
     initialize_logging,
     initialize_optimizer,
     initialize_model,
@@ -81,15 +81,18 @@ class Trainer:
         initialize_run_dir(checkpointing_config=self.configs["checkpointing"])
 
         # Setup Logger
-        self.experiment_tracker = initialize_experiment_tracker(
-            monitoring_config=self.configs["monitoring"],
-            checkpointing_config=self.configs["checkpointing"],
-        )
+        if self.configs["monitoring"].save_to_wandb:
+            wandb_logger = initialize_wandb(
+                monitoring_config=self.configs["monitoring"],
+                checkpointing_config=self.configs["checkpointing"],
+            )
+        else:
+            wandb_logger = None
 
         # Setup Fabric
         self.fabric = initialize_fabric(
             training_config=self.configs["training"],
-            experiment_tracker=self.experiment_tracker,
+            wandb_logger=wandb_logger,
         )
         L.seed_everything(42, verbose=False)
 
@@ -113,7 +116,7 @@ class Trainer:
         self.model, self.optimizer = self.fabric.setup(self.model, self.optimizer)
 
         # Setup HuggingFace Checkpointing
-        if self.configs["checkpointing"].save_checkpoint_repo_id is not None:
+        if self.configs["checkpointing"].save_to_hf:
             initialize_hf_checkpointing(
                 checkpointing_config=self.configs["checkpointing"], fabric=self.fabric
             )
