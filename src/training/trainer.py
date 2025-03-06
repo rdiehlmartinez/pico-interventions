@@ -248,7 +248,6 @@ class Trainer:
             optimizer=self.optimizer,
             lr_scheduler=self.lr_scheduler,
             tokenizer=self.tokenizer,
-            upload_logs=False,
         )
 
         # Save Initial Evaluation Results

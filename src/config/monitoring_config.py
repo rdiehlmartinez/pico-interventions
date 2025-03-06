@@ -5,7 +5,6 @@ Specifies the monitoring process, e.g. how to log metrics and keep track of trai
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 @dataclass
@@ -16,8 +15,8 @@ class LoggingConfig:
 
 @dataclass
 class WandbConfig:
-    project: Optional[str] = "pico"
-    entity: Optional[str] = "pico-lm"
+    project: str = ""
+    entity: str = ""
 
 
 @dataclass

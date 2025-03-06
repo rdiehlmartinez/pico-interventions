@@ -58,7 +58,7 @@ class LearningDynamicsCheckpointingConfig:
 @dataclass
 class HuggingFaceCheckpointingConfig:
     # Should be in the format of <(username or organization name)>/<repo_name>, e.g. pico-lm/demo
-    repo_id: Optional[str] = "pico-lm/demo"
+    repo_id: str = ""
 
     # HuggingFace Collection Slug (specifies a tag for the run)
     collection_slug: Optional[str] = None
@@ -80,7 +80,7 @@ class CheckpointingConfig:
     save_every_n_steps: int = 1000
 
     # Whether to save checkpoints to HuggingFace
-    save_to_hf: Optional[bool] = True
+    save_to_hf: Optional[bool] = False
     hf_checkpoint: HuggingFaceCheckpointingConfig = field(
         default_factory=HuggingFaceCheckpointingConfig
     )

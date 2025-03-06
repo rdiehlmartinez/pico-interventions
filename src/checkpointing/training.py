@@ -103,7 +103,7 @@ def save_checkpoint(
     optimizer: Optimizer,
     lr_scheduler: LRScheduler,
     tokenizer: PreTrainedTokenizerBase,
-    upload_logs: bool = True,
+    upload_logs: bool = False,
 ) -> None:
     """Save training checkpoint and associated states to disk and optionally to HuggingFace Hub.
 
@@ -146,7 +146,7 @@ def save_checkpoint(
         optimizer: The optimizer instance to save
         lr_scheduler: The learning rate scheduler to save
         tokenizer: The tokenizer to save
-        upload_logs: Whether to upload training logs to HF Hub (default: True)
+        upload_logs: Whether to upload training logs to HF Hub (default: False)
 
     """
 
