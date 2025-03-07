@@ -318,7 +318,7 @@ class Trainer:
                     fabric=self.fabric,
                     model=self.model,
                     dataset=self.learning_dynamics_eval_dataset,
-                    compute_gradients=False,
+                    compute_gradients=True,
                 )
                 save_learning_dynamics_states(
                     checkpointing_config=self.configs["checkpointing"],
@@ -544,7 +544,7 @@ class Trainer:
                             fabric=self.fabric,
                             model=self.model,
                             dataset=self.learning_dynamics_eval_dataset,
-                            compute_gradients=False,
+                            compute_gradients=True,
                         )
                         save_learning_dynamics_states(
                             checkpointing_config=self.configs["checkpointing"],
