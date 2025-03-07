@@ -544,14 +544,11 @@ def initialize_wandb(
         Optional[WandbLogger]: An experiment tracker instance.
     """
 
-    if not monitoring_config.save_to_wandb:
-        return None
-
     assert (
-        monitoring_config.wandb.project is not None
+        monitoring_config.wandb.project is not None and monitoring_config.wandb.project != ""
     ), "Wandb project must be provided if wandb is to be used."
     assert (
-        monitoring_config.wandb.entity is not None
+        monitoring_config.wandb.entity is not None and monitoring_config.wandb.entity != ""
     ), "Wandb entity must be provided if wandb is to be used."
 
     _run_id = None
@@ -653,7 +650,9 @@ def initialize_hf_checkpointing(
         return
 
     huggingface_repo_id = checkpointing_config.hf_checkpoint.repo_id
-    assert huggingface_repo_id is not None, "hf_checkpoint.repo_id must be provided."
+    assert (
+        huggingface_repo_id is not None and huggingface_repo_id != ""
+    ), "hf_checkpoint.repo_id must be provided."
 
     repo = create_repo(huggingface_repo_id, exist_ok=True)
 
